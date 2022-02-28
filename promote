@@ -1,0 +1,102 @@
+import json
+import boto3
+
+ssm = boto3.client('ssm')
+autoscaling = boto3.client("autoscaling")
+ec2 = boto3.client('ec2')
+ec2_resources = boto3.resource('ec2')
+alb = boto3.client('elbv2')
+codepipeline = boto3.client("codepipeline")
+
+target_group_a = 'arn:aws:elasticloadbalancing:us-east-1:667814644777:targetgroup/churchspring-qa-tg-v2-a/9d6fc526120e636f'
+target_group_b = 'arn:aws:elasticloadbalancing:us-east-1:667814644777:targetgroup/churchspring-qa-tg-v2-b/294d4d60a8c5f9e1'
+
+# http
+listener_arn = 'arn:aws:elasticloadbalancing:us-east-1:667814644777:listener/app/churchspring-qa-alb-v2/8efdab617f285fe2/92d67b8a6e9c3376'
+rule_arn = 'arn:aws:elasticloadbalancing:us-east-1:667814644777:listener-rule/app/churchspring-qa-alb-v2/8efdab617f285fe2/92d67b8a6e9c3376/1afc4a7e28068d6c'
+
+#https
+https_listener_arn = 'arn:aws:elasticloadbalancing:us-east-1:667814644777:listener/app/churchspring-qa-alb-v2/8efdab617f285fe2/3ac8209f6369adc9'
+https_rule_arn = 'arn:aws:elasticloadbalancing:us-east-1:667814644777:listener-rule/app/churchspring-qa-alb-v2/8efdab617f285fe2/3ac8209f6369adc9/191ae07bd2c2ab28'
+
+def get_parameter():
+    response = ssm.get_parameter(
+    Name='churchspring_qa_asg',
+    WithDecryption=False
+    )
+    return response['Parameter']['Value']
+
+def update_listener_actions(asg,rule,listener):
+    
+    if asg == 'CodeDeploy_churchspring-web-app-qa-deployment-group-v2-b':
+        alb.modify_listener(
+        ListenerArn=listener,
+        DefaultActions=[{'Type':'forward','TargetGroupArn':target_group_b }]
+        )
+        alb.modify_rule(
+            RuleArn=rule,
+            Actions=[{'Type': 'forward','TargetGroupArn': target_group_a }]
+            )
+        ssm.put_parameter(
+            Name='churchspring_qa_asg',
+            Value='CodeDeploy_churchspring-web-app-qa-deployment-group-v2-a',
+            Type='String',
+            Overwrite=True
+            )
+        autoscaling.update_auto_scaling_group(
+        AutoScalingGroupName="CodeDeploy_churchspring-web-app-qa-deployment-group-v2-a",
+        MinSize=0,
+        MaxSize=0,
+        DesiredCapacity=0
+        )
+    else:
+        alb.modify_listener(
+        ListenerArn=listener,
+        DefaultActions=[{'Type':'forward','TargetGroupArn':target_group_a }]
+        )
+        alb.modify_rule(
+            RuleArn=rule,
+            Actions=[{'Type': 'forward','TargetGroupArn': target_group_b }]
+            )
+        ssm.put_parameter(
+            Name='churchspring_qa_asg',
+            Value='CodeDeploy_churchspring-web-app-qa-deployment-group-v2-b',
+            Type='String',
+            Overwrite=True
+            )
+        autoscaling.update_auto_scaling_group(
+        AutoScalingGroupName="CodeDeploy_churchspring-web-app-qa-deployment-group-v2-b",
+        MinSize=0,
+        MaxSize=0,
+        DesiredCapacity=0
+        )
+
+def send_success_status(job_id):
+    codepipeline.put_job_success_result(jobId=job_id)
+
+def send_error_status(job_id):   
+    codepipeline.put_job_failure_result(
+        jobId=job_id,
+         failureDetails={
+        'type': 'JobFailed',
+        'message': 'Job Failes'
+    })
+
+def lambda_handler(event, context):
+    job_id = event["CodePipeline.job"]["id"]
+    try:
+         asg = get_parameter()
+         update_listener_actions(asg,rule_arn,listener_arn)
+         update_listener_actions(asg,https_rule_arn,https_listener_arn)
+         send_success_status(job_id)
+    except:
+        send_error_status(job_id)
+        ra
+        
+       
+    
+    # TODO implement
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }
