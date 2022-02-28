@@ -1,0 +1,98 @@
+import json
+import boto3
+import time
+
+ssm = boto3.client('ssm')
+codedeploy = boto3.client('codedeploy')
+autoscaling = boto3.client("autoscaling")
+codepipeline = boto3.client("codepipeline")
+ec2 = boto3.client('ec2')
+instance_status_ok = ec2.get_waiter('instance_status_ok')
+instance_exists = ec2.get_waiter('instance_exists')
+
+def get_parameter():
+    response = ssm.get_parameter(
+    Name='churchspring_qa_asg',
+    WithDecryption=False
+    )
+    return response['Parameter']['Value']
+    
+def update_deployment_group(asg):
+    response = codedeploy.update_deployment_group(
+            applicationName='churchspring-web-app-qa-deployment-app-v2',
+            currentDeploymentGroupName='churchspring-web-app-qa-deployment-group-v2',
+            autoScalingGroups=[
+                asg
+                ]
+        )
+        
+def update_asg(asg):
+    instances = []
+    response = autoscaling.update_auto_scaling_group(
+        AutoScalingGroupName=asg,
+        MinSize=1,
+        MaxSize=10,
+        DesiredCapacity=1
+        )
+        
+def wait_instance_exists(asg):
+    resp = autoscaling.describe_auto_scaling_instances()
+    instance_id = ''
+
+    for instance in resp['AutoScalingInstances']:
+        print(instance)
+        if instance['AutoScalingGroupName'] == asg:
+           instance_id = instance['InstanceId']
+    print(instance_id)
+    instance_exists.wait(
+        InstanceIds=[
+             instance_id
+             ],
+            Filters=[
+            {
+             'Name':'instance-state-name',
+             'Values':[
+                 'running'
+                 ]
+            }
+    ])
+    return instance_id
+
+def wait_ok_status(instances):
+    instance_status_ok.wait( InstanceIds=instances )
+    
+def send_success_status(job_id):
+    codepipeline.put_job_success_result(jobId=job_id)
+
+def send_error_status(job_id):   
+    codepipeline.put_job_failure_result(
+        jobId=job_id,
+         failureDetails={
+        'type': 'JobFailed',
+        'message': 'Job Failes'
+    })
+    
+def lambda_handler(event, context):
+    job_id = event["CodePipeline.job"]["id"]
+    try:
+        print(job_id)
+        asg = get_parameter()
+        print(asg)
+        update_deployment_group(asg)
+        update_asg(asg)
+        time.sleep(30)
+        instance_id = [wait_instance_exists(asg)]
+
+        print(instance_id)
+        wait_ok_status(instance_id)
+        send_success_status(job_id)
+    except:
+        send_error_status(job_id)
+        raise
+    
+    
+    # TODO implement
+        return {
+        'statusCode': 200,
+        'body': json.dumps('success!')
+    }
